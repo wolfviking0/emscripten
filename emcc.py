@@ -31,12 +31,13 @@ from tools.response_file import read_response_file
 
 # endings = dot + a suffix, safe to test by  filename.endswith(endings)
 C_ENDINGS = ('.c', '.C', '.i')
+CUDA_ENDINGS = ('.cu','.CU')
 CXX_ENDINGS = ('.cpp', '.cxx', '.cc', '.c++', '.CPP', '.CXX', '.CC', '.C++', '.ii')
 OBJC_ENDINGS = ('.m', '.mi')
 OBJCXX_ENDINGS = ('.mm', '.mii')
 SPECIAL_ENDINGLESS_FILENAMES = ('/dev/null',)
 
-SOURCE_ENDINGS = C_ENDINGS + CXX_ENDINGS + OBJC_ENDINGS + OBJCXX_ENDINGS + SPECIAL_ENDINGLESS_FILENAMES
+SOURCE_ENDINGS = CUDA_ENDINGS + C_ENDINGS + CXX_ENDINGS + OBJC_ENDINGS + OBJCXX_ENDINGS + SPECIAL_ENDINGLESS_FILENAMES
 C_ENDINGS = C_ENDINGS + SPECIAL_ENDINGLESS_FILENAMES # consider the special endingless filenames like /dev/null to be C
 
 BITCODE_ENDINGS = ('.bc', '.o', '.obj', '.lo')
@@ -1459,6 +1460,11 @@ There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR P
     if len(preload_files) + len(embed_files) > 0:
       logging.debug('setting up files')
       file_args = []
+      if shared.Settings.CL_VALIDATOR:
+        if len(shared.Settings.CL_VAL_PARAM) > 0:
+          file_args.append('='.join(('--enable-validator', ','.join( str(x) for x in shared.Settings.CL_VAL_PARAM).join('[]'))))
+        else:
+          file_args.append('--enable-validator')
       if len(preload_files) > 0:
         file_args.append('--preload')
         file_args += preload_files

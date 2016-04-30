@@ -129,7 +129,9 @@ var LibraryManager = {
       'library_signals.js',
       'library_idbstore.js',
       'library_async.js',
-      'library_vr.js'
+      'library_vr.js',
+      'library_opencl.js',
+      'library_cuda.js'
     ]).concat(additionalLibraries);
 
     if (BOOTSTRAPPING_STRUCT_INFO) libraries = ['library_bootstrap_structInfo.js', 'library_formatString.js'];

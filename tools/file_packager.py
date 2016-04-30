@@ -75,6 +75,7 @@ DEBUG = os.environ.get('EMCC_DEBUG')
 
 data_target = sys.argv[1]
 
+OPENCL_SUFFIXES = ('.cl')
 IMAGE_SUFFIXES = ('.jpg', '.png', '.bmp')
 AUDIO_SUFFIXES = ('.ogg', '.wav', '.mp3')
 AUDIO_MIMETYPES = { 'ogg': 'audio/ogg', 'wav': 'audio/wav', 'mp3': 'audio/mpeg' }
@@ -88,6 +89,8 @@ AV_WORKAROUND = 0 # Set to 1 to randomize file order and add some padding, to wo
 data_files = []
 excluded_patterns = []
 leading = ''
+has_validator = False
+validator_params = []
 has_preloaded = False
 compress_cnt = 0
 crunch = 0
@@ -155,6 +158,12 @@ for arg in sys.argv[2:]:
     plugin = open(arg.split('=')[1], 'r').read()
     eval(plugin) # should append itself to plugins
     leading = ''
+  elif arg.startswith('--enable-validator'):
+    has_validator = True;
+    valparam = arg.split('=')[1] if '=' in arg else None
+    if valparam:
+        validator_params = (valparam[1:-1]).split(',')
+    leading = ''
   elif leading == 'preload' or leading == 'embed':
     mode = leading
     uses_at_notation = '@' in arg.replace('@@', '') # '@@' in input string means there is an actual @ character, a single '@' means the 'src@dst' notation.
@@ -164,7 +173,11 @@ for arg in sys.argv[2:]:
     else:
       srcpath = dstpath = arg # Use source path as destination path.
     if os.path.isfile(srcpath) or os.path.isdir(srcpath):
-      data_files.append({ 'srcpath': srcpath, 'dstpath': dstpath, 'mode': mode, 'explicit_dst_path': uses_at_notation })
+      if has_validator and srcpath.endswith(OPENCL_SUFFIXES):
+        data_files.append({ 'srcpath': srcpath+'.validated', 'dstpath': dstpath, 'mode': mode, 'explicit_dst_path': uses_at_notation })
+        print >> sys.stderr, 'Generating file "' + srcpath + '" with validator in path "' + srcpath+'.validated' + '".'
+      else:
+        data_files.append({ 'srcpath': srcpath, 'dstpath': dstpath, 'mode': mode, 'explicit_dst_path': uses_at_notation })
     else:
       print >> sys.stderr, 'Warning: ' + arg + ' does not exist, ignoring.'
   elif leading == 'exclude':
@@ -382,6 +395,22 @@ for file_ in data_files:
       if partial not in partial_dirs:
         code += '''Module['FS_createPath']('/%s', '%s', true, true);\n''' % ('/'.join(parts[:i]), parts[i])
         partial_dirs.append(partial)
+
+# Call webcl-validator
+if has_validator:
+  VALIDATOR = os.path.join(shared.LLVM_VALIDATOR_ROOT,'webcl-validator')
+  for file_ in data_files:
+    if file_['srcpath'].endswith('.validated'):
+      fullname = os.path.join(curr_abspath , file_['srcpath'])
+      # Launch webcl-validator
+      args = [VALIDATOR, unsuffixed(fullname)] + [params_.replace(':', '=') for params_ in validator_params]
+      print >> sys.stderr, args
+      proc = Popen(args, stdout=PIPE)
+      out, err = proc.communicate()
+      # Write the output inside file
+      validated = open(fullname, 'wb')
+      validated.write(out)
+      validated.close()
 
 if has_preloaded:
   # Bundle all datafiles into one archive. Avoids doing lots of simultaneous XHRs which has overhead.
