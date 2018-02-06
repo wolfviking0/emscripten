@@ -24,11 +24,16 @@ static void create_file(const char *path, const char *buffer, int mode) {
 void setup() {
   mkdir("working", 0777);
 #ifdef __EMSCRIPTEN__
+
+#ifdef __EMSCRIPTEN_ASMFS__
+  mkdir("working", 0777);
+#else
   EM_ASM(
 #if NODEFS
     FS.mount(NODEFS, { root: '.' }, 'working');
 #endif
   );
+#endif
 #endif
   chdir("working");
   create_file("file", "test", 0777);
@@ -79,15 +84,16 @@ void test() {
 
   err = unlink("dir-readonly");
   assert(err == -1);
-#ifdef __linux__
-  assert(errno == EISDIR);
-#else
-  assert(errno == EPERM);
-#endif
 
+  // Here errno is supposed to be EISDIR, but it is EPERM for NODERAWFS on macOS.
+  // See issue #6121.
+  assert(errno == EISDIR || errno == EPERM);
+
+#ifndef SKIP_ACCESS_TESTS
   err = unlink("dir-readonly/anotherfile");
   assert(err == -1);
   assert(errno == EACCES);
+#endif
 
 #ifndef NO_SYMLINK
   // try unlinking the symlink first to make sure
@@ -118,9 +124,11 @@ void test() {
   assert(err == -1);
   assert(errno == ENOTDIR);
 
+#ifndef SKIP_ACCESS_TESTS
   err = rmdir("dir-readonly/anotherdir");
   assert(err == -1);
   assert(errno == EACCES);
+#endif
 
   err = rmdir("dir-full");
   assert(err == -1);
@@ -128,19 +136,18 @@ void test() {
 
   // test removing the cwd / root. The result isn't specified by
   // POSIX, but Linux seems to set EBUSY in both cases.
-#ifndef __APPLE__
   getcwd(buffer, sizeof(buffer));
   err = rmdir(buffer);
   assert(err == -1);
+#ifdef NODERAWFS
+  assert(errno == ENOTEMPTY);
+#else
   assert(errno == EBUSY);
 #endif
   err = rmdir("/");
   assert(err == -1);
-#ifdef __APPLE__
-  assert(errno == EISDIR);
-#else
-  assert(errno == EBUSY);
-#endif
+  // errno is EISDIR for NODERAWFS on macOS. See issue #6121.
+  assert(errno == EBUSY || errno == EISDIR);
 
 #ifndef NO_SYMLINK
   err = rmdir("dir-empty-link");
@@ -161,5 +168,9 @@ int main() {
   signal(SIGABRT, cleanup);
   setup();
   test();
+
+#ifdef REPORT_RESULT
+  REPORT_RESULT(0);
+#endif
   return EXIT_SUCCESS;
 }

@@ -350,6 +350,12 @@ Options that are modified or new in *emcc* are listed below:
      * This argument is ignored if a target other than HTML is
        specified using the "-o" option.
 
+"--source-map-base <base-url>"
+   The URL for the location where WebAssembly source maps will be
+   published. When this option is provided, the **.wasm** file is
+   updated to have a "sourceMappingURL" section. The resulting URL
+   will have format: "<base-url>" + "<wasm-file-name>" + ".map".
+
 "--minify 0"
    Identical to "-g1".
 
@@ -546,6 +552,22 @@ Options that are modified or new in *emcc* are listed below:
    load during startup. See Avoid memory spikes by separating out
    asm.js.
 
+"-fsanitize=<check>"
+   Instructs the compiler to turn on runtime checks for various forms
+   of undefined or suspicious behavior. For more information, refer
+   to the appropriate compiler documentation. Only the following have
+   been tested:
+
+     * "cfi": Enable [control flow integrity](http://clang.llvm.org/docs/ControlFlowIntegrity.html)
+       checks. Note that this is only supported by Clang/LLVM, and
+       indirect function call checking requires Clang/LLVM 3.9+.
+
+"--output-eol windows|linux"
+   Specifies the line ending to generate for the text files that are
+   outputted. If "--output-eol windows" is passed, the final output
+   files will have Windows \r\n line endings in them. With
+   "--output-eol linux", the final generated files will be written
+   with Unix \n line endings.
 
 Environment variables
 =====================

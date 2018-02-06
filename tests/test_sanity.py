@@ -1,3 +1,4 @@
+from __future__ import print_function
 import os, shutil, stat, subprocess
 from runner import RunnerCore, path_from_root
 from tools.shared import *
@@ -23,10 +24,10 @@ class sanity(RunnerCore):
     super(RunnerCore, self).setUpClass()
     shutil.copyfile(CONFIG_FILE, CONFIG_FILE + '_backup')
 
-    print
-    print 'Running sanity checks.'
-    print 'WARNING: This will modify %s, and in theory can break it although it should be restored properly. A backup will be saved in %s_backup' % (EM_CONFIG, EM_CONFIG)
-    print
+    print()
+    print('Running sanity checks.')
+    print('WARNING: This will modify %s, and in theory can break it although it should be restored properly. A backup will be saved in %s_backup' % (EM_CONFIG, EM_CONFIG))
+    print()
 
     assert os.path.exists(CONFIG_FILE), 'To run these tests, we need a (working!) %s file to already exist' % EM_CONFIG
     assert not os.environ.get('EMCC_DEBUG'), 'do not run sanity checks in debug mode!'
@@ -43,6 +44,7 @@ class sanity(RunnerCore):
     restore()
 
   def do(self, command):
+    print(' '.join(command))
     if type(command) is not list:
       command = [command]
     if command[0] == EMCC:
@@ -186,7 +188,12 @@ class sanity(RunnerCore):
         for y in range(-2, 3):
           f = open(path_from_root('tests', 'fake', 'clang'), 'w')
           f.write('#!/bin/sh\n')
-          f.write('echo "clang version %d.%d" 1>&2\n' % (EXPECTED_LLVM_VERSION[0] + x, EXPECTED_LLVM_VERSION[1] + y))
+          expected_x, expected_y = (int(x) for x in expected_llvm_version().split('.'))
+          expected_x += x
+          expected_y += y
+          if expected_x < 0 or expected_y < 0: continue # must be a valid llvm version
+          print(expected_llvm_version(), x, y, expected_x, expected_y)
+          f.write('echo "clang version %d.%d" 1>&2\n' % (expected_x, expected_y))
           f.close()
           shutil.copyfile(path_from_root('tests', 'fake', 'clang'), path_from_root('tests', 'fake', 'clang++'))
           os.chmod(path_from_root('tests', 'fake', 'clang'), stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
@@ -236,7 +243,7 @@ class sanity(RunnerCore):
     output = self.check_working(EMCC, WARNING)
     # make sure sanity checks notice there is no source dir with version #
     open(path_from_root('tests', 'fake', 'bin', 'llc'), 'w').write('#!/bin/sh\necho "Registered Targets: there IZ a js backend: JavaScript (asm.js, emscripten) backend"')
-    open(path_from_root('tests', 'fake', 'bin', 'clang++'), 'w').write('#!/bin/sh\necho "clang version %s (blah blah)" >&2\necho "..." >&2\n' % '.'.join(map(str, EXPECTED_LLVM_VERSION)))
+    open(path_from_root('tests', 'fake', 'bin', 'clang++'), 'w').write('#!/bin/sh\necho "clang version %s (blah blah)" >&2\necho "..." >&2\n' % expected_llvm_version())
     os.chmod(path_from_root('tests', 'fake', 'bin', 'llc'), stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
     os.chmod(path_from_root('tests', 'fake', 'bin', 'clang++'), stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
     try_delete(SANITY_FILE)
@@ -269,7 +276,7 @@ class sanity(RunnerCore):
     open(path_from_root('tests', 'fake', 'tools', 'clang', 'emscripten-version.txt'), 'w').write(EMSCRIPTEN_VERSION)
     output = self.check_working(EMCC)
     assert VERSION_WARNING not in output
-    fake = '#!/bin/sh\necho "clang version %s (blah blah) (emscripten waka : waka)"\necho "..."\n' % '.'.join(map(str, EXPECTED_LLVM_VERSION))
+    fake = '#!/bin/sh\necho "clang version %s (blah blah) (emscripten waka : waka)"\necho "..."\n' % expected_llvm_version()
     open(path_from_root('tests', 'fake', 'bin', 'clang'), 'w').write(fake)
     open(path_from_root('tests', 'fake', 'bin', 'clang++'), 'w').write(fake)
     os.chmod(path_from_root('tests', 'fake', 'bin', 'clang'), stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
@@ -339,12 +346,12 @@ fi
 
     # emcc should check sanity if no ${EM_CONFIG}_sanity
     restore()
-    time.sleep(0.1)
+    time.sleep(1)
     assert not os.path.exists(SANITY_FILE) # restore is just the settings, not the sanity
     output = self.check_working(EMCC)
     self.assertContained(SANITY_MESSAGE, output)
     assert os.path.exists(SANITY_FILE) # EMCC should have checked sanity successfully
-    assert mtime(SANITY_FILE) >= mtime(CONFIG_FILE)
+    assert mtime(SANITY_FILE) > mtime(CONFIG_FILE)
     assert generate_sanity() == open(SANITY_FILE).read()
     self.assertNotContained(SANITY_FAIL_MESSAGE, output)
 
@@ -424,7 +431,7 @@ fi
     EMCC_CACHE = Cache.dirname
 
     for compiler in [EMCC, EMXX]:
-      print compiler
+      print(compiler)
 
       restore()
 
@@ -444,7 +451,7 @@ fi
         # Building a file that *does* need something *should* trigger cache generation, but only the first time
         for filename, libname in [('hello_libcxx.cpp', 'libcxx')]:
           for i in range(3):
-            print filename, libname, i
+            print(filename, libname, i)
             self.clear()
             try_delete(basebc_name) # we might need to check this file later
             try_delete(dcebc_name) # we might need to check this file later
@@ -497,7 +504,7 @@ fi
     Cache.erase()
 
     for compiler in [EMCC, EMXX]:
-      print compiler
+      print(compiler)
       out, err = Popen([PYTHON, EMCC, path_from_root('tests', 'hello_world.cpp'), '-v'], stdout=PIPE, stderr=PIPE).communicate()
       out2, err2 = Popen([PYTHON, EMCC, path_from_root('tests', 'hello_world.cpp'), '-v', '-nostdinc++'], stdout=PIPE, stderr=PIPE).communicate()
       assert out == out2
@@ -557,10 +564,11 @@ fi
     PORTS_DIR = system_libs.Ports.get_dir()
 
     for compiler in [EMCC, EMXX]:
-      print compiler
+      print(compiler)
 
       for i in [0, 1]:
-        print i
+        self.do([PYTHON, EMCC, '--clear-cache'])
+        print(i)
         if i == 0:
           try_delete(PORTS_DIR)
         else:
@@ -569,12 +577,14 @@ fi
 
         # Building a file that doesn't need ports should not trigger anything
         output = self.do([compiler, path_from_root('tests', 'hello_world_sdl.cpp')])
+        print('no', output)
         assert RETRIEVING_MESSAGE not in output
         assert BUILDING_MESSAGE not in output
         assert not os.path.exists(PORTS_DIR)
 
         # Building a file that need a port does trigger stuff
         output = self.do([compiler, path_from_root('tests', 'hello_world_sdl.cpp'), '-s', 'USE_SDL=2'])
+        print('yes', output)
         assert RETRIEVING_MESSAGE in output, output
         assert BUILDING_MESSAGE in output, output
         assert os.path.exists(PORTS_DIR)
@@ -620,7 +630,7 @@ fi
 
       # basic usage or lack of usage
       for native in [None, 0, 1]:
-        print 'phase 1, part', native
+        print('phase 1, part', native)
         Cache.erase()
         try:
           if native is not None: os.environ['EMCC_NATIVE_OPTIMIZER'] = str(native)
@@ -641,7 +651,7 @@ fi
 
       try:
         for native in [1, 'g']:
-          print 'phase 2, part', native
+          print('phase 2, part', native)
           Cache.erase()
           os.environ['EMCC_NATIVE_OPTIMIZER'] = str(native)
 
@@ -692,16 +702,18 @@ fi
   def test_embuilder(self):
     restore()
 
-    for command, expected, success, result_libs in [
+    tests = [
       ([PYTHON, 'embuilder.py'], ['Emscripten System Builder Tool', 'build libc', 'native_optimizer'], True, []),
       ([PYTHON, 'embuilder.py', 'build', 'waka'], 'ERROR', False, []),
       ([PYTHON, 'embuilder.py', 'build', 'libc'], ['building and verifying libc', 'success'], True, ['libc.bc']),
       ([PYTHON, 'embuilder.py', 'build', 'libc-mt'], ['building and verifying libc-mt', 'success'], True, ['libc-mt.bc']),
       ([PYTHON, 'embuilder.py', 'build', 'dlmalloc'], ['building and verifying dlmalloc', 'success'], True, ['dlmalloc.bc']),
+      ([PYTHON, 'embuilder.py', 'build', 'dlmalloc_debug'], ['building and verifying dlmalloc', 'success'], True, ['dlmalloc_debug.bc']),
       ([PYTHON, 'embuilder.py', 'build', 'dlmalloc_threadsafe'], ['building and verifying dlmalloc_threadsafe', 'success'], True, ['dlmalloc_threadsafe.bc']),
+      ([PYTHON, 'embuilder.py', 'build', 'dlmalloc_threadsafe_debug'], ['building and verifying dlmalloc', 'success'], True, ['dlmalloc_threadsafe_debug.bc']),
       ([PYTHON, 'embuilder.py', 'build', 'pthreads'], ['building and verifying pthreads', 'success'], True, ['pthreads.bc']),
-      ([PYTHON, 'embuilder.py', 'build', 'libcxx'], ['success'], True, ['libcxx.a']),
-      ([PYTHON, 'embuilder.py', 'build', 'libcxx_noexcept'], ['success'], True, ['libcxx_noexcept.a']),
+      ([PYTHON, 'embuilder.py', 'build', 'libcxx'], ['success'], True, ['libcxx.a', 'libcxx.bc']),
+      ([PYTHON, 'embuilder.py', 'build', 'libcxx_noexcept'], ['success'], True, ['libcxx_noexcept.a', 'libcxx_noexcept.bc']),
       ([PYTHON, 'embuilder.py', 'build', 'libcxxabi'], ['success'], True, ['libcxxabi.bc']),
       ([PYTHON, 'embuilder.py', 'build', 'gl'], ['success'], True, ['gl.bc']),
       ([PYTHON, 'embuilder.py', 'build', 'native_optimizer'], ['success'], True, ['optimizer.2.exe']),
@@ -716,19 +728,25 @@ fi
       ([PYTHON, 'embuilder.py', 'build', 'sdl2-ttf'], ['building and verifying sdl2-ttf', 'success'], True, [os.path.join('ports-builds', 'sdl2-ttf', 'libsdl2_ttf.bc')]),
       ([PYTHON, 'embuilder.py', 'build', 'sdl2-net'], ['building and verifying sdl2-net', 'success'], True, [os.path.join('ports-builds', 'sdl2-net', 'libsdl2_net.bc')]),
       ([PYTHON, 'embuilder.py', 'build', 'binaryen'], ['building and verifying binaryen', 'success'], True, []),
-    ]:
-      print command
+      ([PYTHON, 'embuilder.py', 'build', 'cocos2d'], ['building and verifying cocos2d', 'success'], True, [os.path.join('ports-builds', 'Cocos2d', 'libCocos2d.bc')]),
+      ([PYTHON, 'embuilder.py', 'build', 'wasm-libc'], ['building and verifying wasm-libc', 'success'], True, ['wasm-libc.bc']),
+    ]
+    if Settings.WASM_BACKEND:
+      tests.append(([PYTHON, 'embuilder.py', 'build', 'wasm_compiler_rt'], ['building and verifying wasm_compiler_rt', 'success'], True, ['wasm_compiler_rt.a']),)
+
+    for command, expected, success, result_libs in tests:
+      print(command)
       Cache.erase()
 
       proc = Popen(command, stdout=PIPE, stderr=STDOUT)
       out, err = proc.communicate()
       assert (proc.returncode == 0) == success, out
-      if type(expected) == str: expected = [expected]
+      if not isinstance(expected, list): expected = [expected]
       for ex in expected:
-        print '    seek', ex
+        print('    seek', ex)
         assert ex in out, out
       for lib in result_libs:
-        print '    verify', lib
+        print('    verify', lib)
         assert os.path.exists(Cache.get_path(lib))
 
   def test_d8_path(self):
@@ -754,10 +772,10 @@ fi
         if type(engine) is list:
           engine = engine[0]
         if engine == '':
-            print 'WARNING: Not testing engine %s, not configured.' % (filename)
+            print('WARNING: Not testing engine %s, not configured.' % (filename))
             continue
 
-        print filename, engine
+        print(filename, engine)
 
         test_engine_path = os.path.join(test_path, filename)
         f = open(test_engine_path, 'w')
@@ -767,7 +785,7 @@ fi
         os.chmod(test_engine_path, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
 
         try:
-          out = jsrun.run_js(sample_script, engine=test_engine_path, args=['--foo'], full_output=True, assert_returncode=0)
+          out = jsrun.run_js(sample_script, engine=test_engine_path, args=['--foo'], full_output=True, assert_returncode=0, skip_check=True)
         except Exception as e:
           if 'd8' in filename:
             assert False, 'Your d8 version does not correctly parse command-line arguments, please upgrade or delete from ~/.emscripten config file: %s' % (e)
@@ -790,13 +808,13 @@ fi
 
     assert 'EMCC_FORCE_STDLIBS' not in os.environ
 
-    print 'normal build'
+    print('normal build')
     Cache.erase()
     build()
     test()
 
     try:
-      print 'wacky env vars, these should not mess our bootstrapping'
+      print('wacky env vars, these should not mess our bootstrapping')
       os.environ['EMCC_FORCE_STDLIBS'] = '1'
       Cache.erase()
       build()
@@ -852,9 +870,9 @@ fi
     try:
       os.environ['EMCC_DEBUG'] = '1'
       os.environ['EMCC_WASM_BACKEND'] = '1'
-      make_fake('wasm32-unknown-unknown')
+      make_fake('wasm32-unknown-unknown-elf')
       # see that we request the right backend from llvm
-      self.check_working([EMCC, 'tests/hello_world.c', '-c'], 'wasm32-unknown-unknown')
+      self.check_working([EMCC, 'tests/hello_world.c', '-c'], 'wasm32-unknown-unknown-elf')
       os.environ['EMCC_WASM_BACKEND'] = '0'
       make_fake('asmjs-unknown-emscripten')
       self.check_working([EMCC, 'tests/hello_world.c', '-c'], 'asmjs-unknown-emscripten')
@@ -864,7 +882,7 @@ fi
       self.check_working(EMCC)
       output = self.check_working(EMCC, 'check tells us to use')
       if 'wasm backend' in output:
-        self.check_working([EMCC, 'tests/hello_world.c', '-c'], 'wasm32-unknown-unknown')
+        self.check_working([EMCC, 'tests/hello_world.c', '-c'], 'wasm32-unknown-unknown-elf')
       else:
         assert 'asm.js backend' in output
         self.check_working([EMCC, 'tests/hello_world.c', '-c'], 'asmjs-unknown-emscripten')      
@@ -895,7 +913,7 @@ fi
     assert not os.environ.get('LLVM'), 'we need to modify LLVM env var for this'
 
     f = open(CONFIG_FILE, 'a')
-    f.write('LLVM_ROOT = os.getenv("LLVM") or "' + path_from_root('tests', 'fake1', 'bin') + '"\n')
+    f.write('LLVM_ROOT = os.getenv("LLVM", "' + path_from_root('tests', 'fake1', 'bin') + '")\n')
     f.close()
 
     safe_ensure_dirs(path_from_root('tests', 'fake1', 'bin'))
@@ -949,17 +967,90 @@ fi
     finally:
       del os.environ['EMCC_WASM_BACKEND']
 
+  def test_wasm_backend_builds(self):
+    # we can build a program using the wasm backend, rebuilding binaryen etc. as needed
+    restore()
+    def check():
+      print(self.do([PYTHON, EMCC, '--clear-cache']))
+      print(self.do([PYTHON, EMCC, '--clear-ports']))
+      try:
+        os.environ['EMCC_WASM_BACKEND'] = '1'
+        self.check_working([EMCC, 'tests/hello_world.c'], '')
+      finally:
+        del os.environ['EMCC_WASM_BACKEND']
+    print('normally')
+    check()
+    print('with no BINARYEN_ROOT')
+    open(CONFIG_FILE, 'a').write('''
+BINARYEN_ROOT = ''
+    ''')
+    print(open(CONFIG_FILE).read())
+    check()
+
   def test_binaryen(self):
     import tools.ports.binaryen as binaryen
     tag_file = Cache.get_path('binaryen_tag_' + binaryen.TAG + '.txt')
-    try_delete(tag_file)
-    # if BINARYEN_ROOT is set, we don't build the port. Check we do built it if not
-    restore()
-    config = open(CONFIG_FILE).read()
-    config = config.replace('BINARYEN_ROOT', '#')
-    open(CONFIG_FILE, 'w').write(config)
-    subprocess.check_call([PYTHON, 'embuilder.py', 'build', 'binaryen'])
-    assert os.path.exists(tag_file)
-    subprocess.check_call([PYTHON, 'emcc.py', 'tests/hello_world.c', '-s', 'BINARYEN=1'])
-    self.assertContained('hello, world!', run_js('a.out.js'))
+
+    assert not os.environ.get('BINARYEN') # must not have binaryen env var set
+
+    # test in 2 modes - with BINARYEN_ROOT in the config file, set to '', and without it entirely
+    for binaryen_root_in_config in [1, 0]:
+      print('binaryen_root_in_config:', binaryen_root_in_config)
+
+      def prep():
+        restore()
+        print('clearing ports...')
+        print(self.do([PYTHON, EMCC, '--clear-ports']))
+        wipe()
+        self.do([PYTHON, EMCC]) # first run stage
+        try_delete(tag_file)
+        # if BINARYEN_ROOT is set, we don't build the port. Check we do build it if not
+        if binaryen_root_in_config:
+          config = open(CONFIG_FILE).read()
+          assert '''BINARYEN_ROOT = os.path.expanduser(os.getenv('BINARYEN', ''))''' in config, config # setup created it to be ''
+          print('created config:')
+          print(config)
+          restore()
+          config = open(CONFIG_FILE).read()
+          config = config.replace('BINARYEN_ROOT', '''BINARYEN_ROOT = os.path.expanduser(os.getenv('BINARYEN', '')) # ''')
+        else:
+          restore()
+          config = open(CONFIG_FILE).read()
+          config = config.replace('BINARYEN_ROOT', '#')
+        print('modified config:')
+        print(config)
+        open(CONFIG_FILE, 'w').write(config)
+
+      print('build using embuilder')
+      prep()
+      subprocess.check_call([PYTHON, 'embuilder.py', 'build', 'binaryen'])
+      assert os.path.exists(tag_file)
+      subprocess.check_call([PYTHON, 'emcc.py', 'tests/hello_world.c', '-s', 'BINARYEN=1', '-s', 'BINARYEN_METHOD="interpret-binary"'])
+      self.assertContained('hello, world!', run_js('a.out.js'))
+
+      print('see we show an error for emmake (we cannot build natively under emmake)')
+      prep()
+      try_delete('a.out.js')
+      out = self.do([PYTHON, 'emmake.py', EMCC, 'tests/hello_world.c', '-s', 'BINARYEN=1', '-s', 'BINARYEN_METHOD="interpret-binary"'])
+      assert not os.path.exists(tag_file)
+      assert not os.path.exists('a.out.js')
+      self.assertContained('For example, for binaryen, do "python embuilder.py build binaryen"', out)
+
+      if not binaryen_root_in_config:
+        print('build on demand')
+        for side_module in (False, True):
+          print(side_module)
+          prep()
+          assert not os.path.exists(tag_file)
+          try_delete('a.out.js')
+          try_delete('a.out.wasm')
+          cmd = [PYTHON, 'emcc.py', 'tests/hello_world.c', '-s', 'BINARYEN=1', '-s', 'BINARYEN_METHOD="interpret-binary"']
+          if side_module:
+            cmd += ['-s', 'SIDE_MODULE=1']
+          subprocess.check_call(cmd)
+          assert os.path.exists(tag_file)
+          assert os.path.exists('a.out.wasm')
+          if not side_module:
+            assert os.path.exists('a.out.js')
+            self.assertContained('hello, world!', run_js('a.out.js'))
 
