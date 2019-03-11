@@ -1,3 +1,8 @@
+// Copyright 2013 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 //'use strict';
 
 var LibraryOpenAL = {
@@ -468,29 +473,29 @@ var LibraryOpenAL = {
     updateListenerSpace: function(ctx) {
       var listener = ctx.audioCtx.listener;
       if (listener.positionX) {
-        listener.positionX.value = listener._position[0];
-        listener.positionY.value = listener._position[1];
-        listener.positionZ.value = listener._position[2];
+        listener.positionX.value = ctx.listener.position[0];
+        listener.positionY.value = ctx.listener.position[1];
+        listener.positionZ.value = ctx.listener.position[2];
       } else {
 #if OPENAL_DEBUG
         warnOnce('Listener position attributes are not present, falling back to setPosition()');
 #endif
-        listener.setPosition(listener._position[0], listener._position[1], listener._position[2]);
+        listener.setPosition(ctx.listener.position[0], ctx.listener.position[1], ctx.listener.position[2]);
       }
       if (listener.forwardX) {
-        listener.forwardX.value = listener._direction[0];
-        listener.forwardY.value = listener._direction[1];
-        listener.forwardZ.value = listener._direction[2];
-        listener.upX.value = listener._up[0];
-        listener.upY.value = listener._up[1];
-        listener.upZ.value = listener._up[2];
+        listener.forwardX.value = ctx.listener.direction[0];
+        listener.forwardY.value = ctx.listener.direction[1];
+        listener.forwardZ.value = ctx.listener.direction[2];
+        listener.upX.value = ctx.listener.up[0];
+        listener.upY.value = ctx.listener.up[1];
+        listener.upZ.value = ctx.listener.up[2];
       } else {
 #if OPENAL_DEBUG
         warnOnce('Listener orientation attributes are not present, falling back to setOrientation()');
 #endif
         listener.setOrientation(
-          listener._direction[0], listener._direction[1], listener._direction[2],
-          listener._up[0], listener._up[1], listener._up[2]);
+          ctx.listener.direction[0], ctx.listener.direction[1], ctx.listener.direction[2],
+          ctx.listener.up[0], ctx.listener.up[1], ctx.listener.up[2]);
       }
 
       // Update sources that are relative to the listener
@@ -512,10 +517,10 @@ var LibraryOpenAL = {
       var dirY = src.direction[1];
       var dirZ = src.direction[2];
 
-      var listener = src.context.audioCtx.listener;
-      var lPosX = listener._position[0];
-      var lPosY = listener._position[1];
-      var lPosZ = listener._position[2];
+      var listener = src.context.listener;
+      var lPosX = listener.position[0];
+      var lPosY = listener.position[1];
+      var lPosZ = listener.position[2];
 
       // WebAudio does spatialization in world-space coordinates, meaning both the buffer sources and
       // the listener position are in the same absolute coordinate system relative to a fixed origin.
@@ -532,21 +537,31 @@ var LibraryOpenAL = {
       // a displacement from the listener.
       if (src.relative) {
         // Negate the listener direction since forward is -Z.
-        var lBackX = -listener._direction[0];
-        var lBackY = -listener._direction[1];
-        var lBackZ = -listener._direction[2];
-        var lUpX = listener._up[0];
-        var lUpY = listener._up[1];
-        var lUpZ = listener._up[2];
+        var lBackX = -listener.direction[0];
+        var lBackY = -listener.direction[1];
+        var lBackZ = -listener.direction[2];
+        var lUpX = listener.up[0];
+        var lUpY = listener.up[1];
+        var lUpZ = listener.up[2];
+
+        var inverseMagnitude = function(x, y, z) {
+          var length = Math.sqrt(x * x + y * y + z * z);
+
+          if (length < Number.EPSILON) {
+            return 0.0;
+          }
+
+          return 1.0 / length;
+        };
 
         // Normalize the Back vector
-        var invMag = 1.0 / Math.sqrt(lBackX * lBackX + lBackY * lBackY + lBackZ * lBackZ);
+        var invMag = inverseMagnitude(lBackX, lBackY, lBackZ);
         lBackX *= invMag;
         lBackY *= invMag;
         lBackZ *= invMag;
 
         // ...and the Up vector
-        var invMag = 1.0 / Math.sqrt(lUpX * lUpX + lUpY * lUpY + lUpZ * lUpZ);
+        invMag = inverseMagnitude(lUpX, lUpY, lUpZ);
         lUpX *= invMag;
         lUpY *= invMag;
         lUpZ *= invMag;
@@ -557,15 +572,15 @@ var LibraryOpenAL = {
         var lRightZ = (lUpX * lBackY - lUpY * lBackX);
 
         // Back and Up might not be exactly perpendicular, so the cross product also needs normalization
-        var invMag = 1.0 / Math.sqrt(lRightX * lRightX + lRightY * lRightY + lRightZ * lRightZ);
+        invMag = inverseMagnitude(lRightX, lRightY, lRightZ);
         lRightX *= invMag;
         lRightY *= invMag;
         lRightZ *= invMag;
 
         // Recompute Up from the now orthonormal Right and Back vectors so we have a fully orthonormal basis
-        var lUpX = (lBackY * lRightZ - lBackZ * lRightY);
-        var lUpY = (lBackZ * lRightX - lBackX * lRightZ);
-        var lUpZ = (lBackX * lRightY - lBackY * lRightX);
+        lUpX = (lBackY * lRightZ - lBackZ * lRightY);
+        lUpY = (lBackZ * lRightX - lBackX * lRightZ);
+        lUpZ = (lBackX * lRightY - lBackY * lRightX);
 
         var oldX = dirX;
         var oldY = dirY;
@@ -576,9 +591,9 @@ var LibraryOpenAL = {
         dirY = oldX * lRightY + oldY * lUpY + oldZ * lBackY;
         dirZ = oldX * lRightZ + oldY * lUpZ + oldZ * lBackZ;
 
-        var oldX = posX;
-        var oldY = posY;
-        var oldZ = posZ;
+        oldX = posX;
+        oldY = posY;
+        oldZ = posZ;
 
         // ...and to the source position
         posX = oldX * lRightX + oldY * lUpX + oldZ * lBackX;
@@ -617,9 +632,9 @@ var LibraryOpenAL = {
       var velX = src.velocity[0];
       var velY = src.velocity[1];
       var velZ = src.velocity[2];
-      var lVelX = listener._velocity[0];
-      var lVelY = listener._velocity[1];
-      var lVelZ = listener._velocity[2];
+      var lVelX = listener.velocity[0];
+      var lVelY = listener.velocity[1];
+      var lVelZ = listener.velocity[2];
       if (posX === lPosX && posY === lPosY && posZ === lPosZ
         || velX === lVelX && velY === lVelY && velZ === lVelZ)
       {
@@ -701,13 +716,16 @@ var LibraryOpenAL = {
         AL.setSourceState(src, 0x1011 /* AL_INITIAL */);
       }
 
-      src.bufsProcessed = 0;
-      while (offset > src.bufQueue[src.bufsProcessed].audioBuf.duration) {
-        offset -= src.bufQueue[src.bufsProcessed].audiobuf.duration;
-        src.bufsProcessed++;
+      if (src.bufQueue[src.bufsProcessed].audioBuf !== null) {
+        src.bufsProcessed = 0;
+        while (offset > src.bufQueue[src.bufsProcessed].audioBuf.duration) {
+          offset -= src.bufQueue[src.bufsProcessed].audiobuf.duration;
+          src.bufsProcessed++;
+        }
+
+        src.bufOffset = offset;
       }
 
-      src.bufOffset = offset;
       if (playing) {
         AL.setSourceState(src, 0x1012 /* AL_PLAYING */);
       }
@@ -813,11 +831,11 @@ var LibraryOpenAL = {
 
       switch (param) {
       case 0x1004 /* AL_POSITION */:
-        return AL.currentCtx.audioCtx.listener._position;
+        return AL.currentCtx.listener.position;
       case 0x1006 /* AL_VELOCITY */:
-        return AL.currentCtx.audioCtx.listener._velocity;
+        return AL.currentCtx.listener.velocity;
       case 0x100F /* AL_ORIENTATION */:
-        return AL.currentCtx.audioCtx.listener._direction.concat(AL.currentCtx.audioCtx.listener._up);
+        return AL.currentCtx.listener.direction.concat(AL.currentCtx.listener.up);
       case 0x100A /* AL_GAIN */:
         return AL.currentCtx.gain.gain.value;
       default:
@@ -844,7 +862,7 @@ var LibraryOpenAL = {
         return;
       }
 
-      var listener = AL.currentCtx.audioCtx.listener;
+      var listener = AL.currentCtx.listener;
       switch (param) {
       case 0x1004 /* AL_POSITION */:
         if (!Number.isFinite(value[0]) || !Number.isFinite(value[1]) || !Number.isFinite(value[2])) {
@@ -855,9 +873,9 @@ var LibraryOpenAL = {
           return;
         }
 
-        listener._position[0] = value[0];
-        listener._position[1] = value[1];
-        listener._position[2] = value[2];
+        listener.position[0] = value[0];
+        listener.position[1] = value[1];
+        listener.position[2] = value[2];
         AL.updateListenerSpace(AL.currentCtx);
         break;
       case 0x1006 /* AL_VELOCITY */:
@@ -869,9 +887,9 @@ var LibraryOpenAL = {
           return;
         }
 
-        listener._velocity[0] = value[0];
-        listener._velocity[1] = value[1];
-        listener._velocity[2] = value[2];
+        listener.velocity[0] = value[0];
+        listener.velocity[1] = value[1];
+        listener.velocity[2] = value[2];
         AL.updateListenerSpace(AL.currentCtx);
         break;
       case 0x100A /* AL_GAIN */:
@@ -896,12 +914,12 @@ var LibraryOpenAL = {
           return;
         }
 
-        listener._direction[0] = value[0];
-        listener._direction[1] = value[1];
-        listener._direction[2] = value[2];
-        listener._up[0] = value[3];
-        listener._up[1] = value[4];
-        listener._up[2] = value[5];
+        listener.direction[0] = value[0];
+        listener.direction[1] = value[1];
+        listener.direction[2] = value[2];
+        listener.up[0] = value[3];
+        listener.up[1] = value[4];
+        listener.up[2] = value[5];
         AL.updateListenerSpace(AL.currentCtx);
         break;
       default:
@@ -1596,7 +1614,7 @@ var LibraryOpenAL = {
 
     // NULL is a valid device name here (resolves to default);
     if (pDeviceName !== 0) {
-      resolvedDeviceName = Pointer_stringify(pDeviceName);
+      resolvedDeviceName = UTF8ToString(pDeviceName);
       if (resolvedDeviceName !== AL.CAPTURE_DEVICE_NAME) {
 #if OPENAL_DEBUG
         console.error('alcCaptureOpenDevice() with invalid device name \''+resolvedDeviceName+'\'');
@@ -1628,7 +1646,7 @@ var LibraryOpenAL = {
       || (navigator.mediaDevices 
       &&  navigator.mediaDevices.getUserMedia);
 
-    if (!has_getUserMedia) {
+    if (!has_getUserMedia) {
 #if OPENAL_DEBUG
       console.error('alcCaptureOpenDevice() cannot capture audio, because your browser lacks a `getUserMedia()` implementation');
 #endif
@@ -2002,9 +2020,9 @@ var LibraryOpenAL = {
       // https://github.com/jpernst/emscripten/issues/2#issuecomment-312729735
       // if you're curious about why.
 
-      function lerp(from, to, progress) {
+      var lerp = function(from, to, progress) {
         return (1 - progress) * from + progress * to;
-      }
+      };
 
       for (var i = 0, frame_i = 0; frame_i < requestedFrameCount; ++frame_i) {
 
@@ -2036,7 +2054,7 @@ var LibraryOpenAL = {
   alcOpenDevice__sig: 'ii',
   alcOpenDevice: function(pDeviceName) {
     if (pDeviceName) {
-      var name = Pointer_stringify(pDeviceName);
+      var name = UTF8ToString(pDeviceName);
       if (name !== AL.DEVICE_NAME) {
         return 0;
       }
@@ -2054,7 +2072,7 @@ var LibraryOpenAL = {
   alcCloseDevice__proxy: 'sync',
   alcCloseDevice__sig: 'ii',
   alcCloseDevice: function(deviceId) {
-    if (!deviceId in AL.deviceRefCounts || AL.deviceRefCounts[deviceId] > 0) {
+    if (!(deviceId in AL.deviceRefCounts) || AL.deviceRefCounts[deviceId] > 0) {
       return 0 /* ALC_FALSE */;
     }
 
@@ -2066,7 +2084,7 @@ var LibraryOpenAL = {
   alcCreateContext__proxy: 'sync',
   alcCreateContext__sig: 'iii',
   alcCreateContext: function(deviceId, pAttrList) {
-    if (!deviceId in AL.deviceRefCounts) {
+    if (!(deviceId in AL.deviceRefCounts)) {
 #if OPENAL_DEBUG
       console.log('alcCreateContext() called with an invalid device');
 #endif
@@ -2168,16 +2186,17 @@ var LibraryOpenAL = {
 
     var gain = ac.createGain();
     gain.connect(ac.destination);
-    // Extend the Web Audio API AudioListener object with a few tracking values of our own.
-    ac.listener._position = [0.0, 0.0, 0.0];
-    ac.listener._velocity = [0.0, 0.0, 0.0];
-    ac.listener._direction = [0.0, 0.0, 0.0];
-    ac.listener._up = [0.0, 0.0, 0.0];
     var ctx = {
       deviceId: deviceId,
       id: AL.newId(),
       attrs: attrs,
       audioCtx: ac,
+      listener: {
+    	  position: [0.0, 0.0, 0.0],
+    	  velocity: [0.0, 0.0, 0.0],
+    	  direction: [0.0, 0.0, 0.0],
+    	  up: [0.0, 0.0, 0.0]
+      },
       sources: [],
       interval: setInterval(function() { AL.scheduleContextAudio(ctx); }, AL.QUEUE_INTERVAL),
       gain: gain,
@@ -2287,7 +2306,7 @@ var LibraryOpenAL = {
   alcIsExtensionPresent__proxy: 'sync',
   alcIsExtensionPresent__sig: 'iii',
   alcIsExtensionPresent: function(deviceId, pExtName) {
-    name = Pointer_stringify(pExtName);
+    var name = UTF8ToString(pExtName);
 
     return AL.ALC_EXTENSIONS[name] ? 1 : 0;
   },
@@ -2323,7 +2342,7 @@ var LibraryOpenAL = {
       AL.alcErr = 0xA004 /* ALC_INVALID_VALUE */;
       return 0; /* ALC_NONE */
     }
-    name = Pointer_stringify(pEnumName);
+    name = UTF8ToString(pEnumName);
     // See alGetEnumValue(), but basically behave the same as OpenAL-Soft
     switch(name) {
     case 'ALC_NO_ERROR': return 0;
@@ -2628,6 +2647,7 @@ var LibraryOpenAL = {
 
   emscripten_alcGetStringiSOFT__proxy: 'sync',
   emscripten_alcGetStringiSOFT__sig: 'iiii',
+  emscripten_alcGetStringiSOFT__deps: ['alcGetString'],
   emscripten_alcGetStringiSOFT: function(deviceId, param, index) {
     if (!deviceId in AL.deviceRefCounts) {
 #if OPENAL_DEBUG
@@ -2655,7 +2675,7 @@ var LibraryOpenAL = {
       }
     default:
       if (index === 0) {
-        return alcGetString(deviceId, param);
+        return _alcGetString(deviceId, param);
       } else {
 #if OPENAL_DEBUG
         console.log('alcGetStringiSOFT() with param 0x' + param.toString(16) + ' not implemented yet');
@@ -2904,7 +2924,7 @@ var LibraryOpenAL = {
   alIsExtensionPresent__proxy: 'sync',
   alIsExtensionPresent__sig: 'ii',
   alIsExtensionPresent: function(pExtName) {
-    name = Pointer_stringify(pExtName);
+    name = UTF8ToString(pExtName);
 
     return AL.AL_EXTENSIONS[name] ? 1 : 0;
   },
@@ -2946,7 +2966,7 @@ var LibraryOpenAL = {
       AL.currentCtx.err = 0xA003 /* AL_INVALID_VALUE */;
       return 0 /* AL_NONE */;
     }
-    name = Pointer_stringify(pEnumName);
+    name = UTF8ToString(pEnumName);
 
     switch(name) {
     // Spec doesn't clearly state that alGetEnumValue() is required to
@@ -3086,7 +3106,7 @@ var LibraryOpenAL = {
       break;
     case 0xB004 /* AL_EXTENSIONS */:
       ret = '';
-      for (ext in AL.AL_EXTENSIONS) {
+      for (var ext in AL.AL_EXTENSIONS) {
         ret = ret.concat(ext);
         ret = ret.concat(' ');
       }

@@ -1,3 +1,8 @@
+// Copyright 2014 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
@@ -56,7 +61,7 @@ void loop()
       Module.canvas = canvas2;
     );
     assert(emscripten_webgl_get_current_context() == 0);
-    context = emscripten_webgl_create_context(0, &attrs);
+    context = emscripten_webgl_create_context("#canvas", &attrs);
 
     assert(context > 0); // Must have received a valid context.
     res = emscripten_webgl_make_context_current(context);
@@ -76,9 +81,18 @@ int main()
 {
   bool first = true;
   EmscriptenWebGLContextAttributes attrs;
-  for(int depth = 0; depth <= 1; ++depth)
-  for(int stencil = 0; stencil <= 1; ++stencil)
-  for(int antialias = 0; antialias <= 1; ++antialias)
+  int depth = 0;
+  int stencil = 0;
+  int antialias = 0;
+#ifndef NO_DEPTH
+  for(depth = 0; depth <= 1; ++depth)
+#endif
+#ifndef NO_STENCIL
+  for(stencil = 0; stencil <= 1; ++stencil)
+#endif
+#ifndef NO_ANTIALIAS
+  for(antialias = 0; antialias <= 1; ++antialias)
+#endif
   {
     emscripten_webgl_init_context_attributes(&attrs);
     attrs.depth = depth;
@@ -143,7 +157,7 @@ int main()
     assert(!!numSamples == !!antialias);
     printf("\n");
 
-    // Test bug https://github.com/kripken/emscripten/issues/1330:
+    // Test bug https://github.com/emscripten-core/emscripten/issues/1330:
     unsigned vb;
     glGenBuffers(1, &vb);
     glBindBuffer(GL_ARRAY_BUFFER, vb);
@@ -163,6 +177,11 @@ int main()
     glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &vb4);
     if (vb2 != vb4) printf("Index 1: Generated VB: %d, read back VB: %d\n", vb2, vb4);
     assert(vb2 == vb4);
+
+    // Test bug https://github.com/emscripten-core/emscripten/issues/7472:
+    GLint enabled = 0;
+    glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &enabled);
+    assert(enabled == 0);
 
     // Test that deleting the context works.
     res = emscripten_webgl_destroy_context(context);

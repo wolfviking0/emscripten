@@ -1,7 +1,8 @@
-// -*- Mode: javascript; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 ; js-indent-level : 2 ; js-curly-indent-offset: 0 -*-
-// vim: set ts=2 et sw=2:
-
-//==============================================================================
+// Copyright 2011 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+//
 // Optimizer tool. This is meant to be run after the emscripten compiler has
 // finished generating code. These optimizations are done on the generated
 // code to further improve it.
@@ -13,7 +14,6 @@
 // TODO: Optimize traverse to modify a node we want to replace, in-place,
 //       instead of returning it to the previous call frame where we check?
 // TODO: Share EMPTY_NODE instead of emptyNode that constructs?
-//==============================================================================
 
 if (!Math.fround) {
   var froundBuffer = new Float32Array(1);
@@ -997,6 +997,21 @@ function simplifyExpressions(ast) {
   });
 }
 
+// Checks if a coercion is necessary for asm.js, and cannot be
+// removed. Receives the node, and the expression stack, which
+// includes the node at the end.
+function isNecessaryCoercion(node, stack) {
+  assert(stack[stack.length - 1] === node);
+  var parent = stack[stack.length - 2];
+  if (!parent) return false;
+  if (parent[0] === 'sub') {
+    // We are x & mask in FUNCTION_TABLE[x & mask], and the mask
+    // is necessary.
+    return true;
+  }
+  return false;
+}
+
 function localCSE(ast) {
   // very simple CSE/GVN type optimization, factor out common expressions in a single basic block
   assert(asm);
@@ -1053,7 +1068,10 @@ function localCSE(ast) {
         }
         // next, process the line and try to find useful expressions
         var skips = [];
+
+        var stack = [];
         traverse(curr, function seekExpressions(node, type) {
+          stack.push(node);
           if (type === 'sub' && node[1][0] === 'name' && node[2][0] === 'binary' && node[2][1] === '>>') {
             // skip over the shift, we can't cse that
             skips.push(node[2]);
@@ -1063,6 +1081,8 @@ function localCSE(ast) {
             if (type === 'binary' && skips.indexOf(node) >= 0) return;
             if (measureCost(node) < MIN_COST) return;
             if (detectType(node, asmData) === ASM_NONE) return; // if we can't figure it out locally, forget it
+            // We cannot CSE out a necessary asm.js coercion
+            if (isNecessaryCoercion(node, stack)) return;
             var str = JSON.stringify(node);
             var lookup = exps[str];
             if (!lookup) {
@@ -1117,6 +1137,8 @@ function localCSE(ast) {
               return makeSignedAsmCoercion(['name', lookup[2]], type, sign);
             }
           }
+        }, function(node, type) { // post-traversal
+          stack.pop();
         });
         // finally, repeat invalidation processing, to not be sensitive to inter-line control flow
         doInvalidations(curr);
@@ -1425,6 +1447,15 @@ function hasSideEffects(node) { // this is 99% incomplete!
         if (hasSideEffects(children[i])) return true;
       }
       return false;
+    }
+    case 'dot': {
+      // In theory any property access in JS can have side effects, but not in
+      // objects we assume are static.
+      if (node[1][0] === 'name') {
+        var name = node[1][1];
+        if (name === 'Math') return false;
+      }
+      return true;
     }
     default: return true;
   }
@@ -1931,6 +1962,7 @@ function detectType(node, asmInfo, inVarDef) {
       if (!parseHeap(node[1][1])) return ASM_NONE;
       return parseHeapTemp.float ? ASM_DOUBLE : ASM_INT; // XXX ASM_FLOAT?
     }
+    case 'stat': return ASM_NONE;
   }
   assert(0 , 'horrible ' + JSON.stringify(node));
 }
@@ -2059,7 +2091,7 @@ function detectSign(node) {
           if (node[2][0] === 'num' || node[3][0] === 'num') return ASM_FLEXIBLE;
           return ASM_NONSIGNED;
         }
-        case '/': return ASM_NONSIGNED; // without a coercion, this is double
+        case '/': case '%': return ASM_NONSIGNED; // without a coercion, this is double
         case '==': case '!=': case '<': case '<=': case '>': case '>=': return ASM_SIGNED;
         default: throw 'yikes ' + node[1];
       }
@@ -2070,7 +2102,8 @@ function detectSign(node) {
         case '-': return ASM_FLEXIBLE;
         case '+': return ASM_NONSIGNED; // XXX double
         case '~': return ASM_SIGNED;
-        default: throw 'yikes';
+        case '!': return ASM_FLEXIBLE;
+        default: throw 'yikes ' + node[1];
       }
       break;
     }
@@ -6083,8 +6116,10 @@ function emterpretify(ast) {
   }
 
   // functions which are ok to run while async, even if not emterpreted
-  var OK_TO_CALL_WHILE_ASYNC = set('stackSave', 'stackRestore', 'stackAlloc', 'setThrew', '_memset', '_memcpy', '_memmove', '_strlen', '_strncpy', '_strcpy', '_strcat', 'SAFE_HEAP_LOAD', 'SAFE_HEAP_STORE', 'SAFE_FT_MASK');
-  function okToCallWhileAsync(name) {
+  // safe-heap methods may be called at any time
+  // stack operations are called from invokes for proper stack unwinding
+  var OK_TO_CALL_WHILE_ASYNC = set('SAFE_HEAP_LOAD', 'SAFE_HEAP_STORE', 'SAFE_FT_MASK', 'stackSave', 'stackRestore');
+  function okToCallDuringAsyncRestore(name) {
     // dynCall *can* be on the stack, they are just bridges; what matters is where they go
     if (/^dynCall_/.test(name)) return true;
     if (name in OK_TO_CALL_WHILE_ASYNC) return true;
@@ -7360,16 +7395,31 @@ function emterpretify(ast) {
       return ret;
     }
 
+    // if we enter a function (emterpreted or not) while we are in
+    // state 1, that means the stack was completely unwound and we are
+    // during a sleep. mark the state as definitely asleep, which lets us
+    // assert on seeing state 1 after each call in non-emterpreted code.
+    function makePreludeStateChange() {
+      assert(ASYNC);
+      return ['if', srcToExp('(asyncState|0) == 1'), srcToStat('asyncState = 3;')];
+    }
+
     // walkFunction main
 
     var ignore = !(func[1] in EMTERPRETED_FUNCS);
 
     if (ignore) {
-      // we are not emterpreting this function
-      if (ASYNC && ASSERTIONS && !okToCallWhileAsync(func[1])) {
-        // we need to be careful to never enter non-emterpreted code while doing an async save/restore,
-        // which is what happens if non-emterpreted code is on the stack while we attempt to save.
-        // add asserts right after each call
+      // we are not emterpreting this function. not much to do here, but we do need to
+      // set up some interactions with emterpreted code
+      if (ASYNC && ASSERTIONS && !okToCallDuringAsyncRestore(func[1])) {
+        function makeCheckBadState(state) {
+          // A bad state is when restoring the stack: we must only load the stack in that state,
+          // not do any actual work.
+          return ['binary', '==', makeAsmCoercion(['name', 'asyncState'], ASM_INT), ['num', state]];
+        }
+        function makeBadStateAbort(check, type, otherwise) {
+          return ['conditional', check, makeAsmCoercion(['call', ['name', 'abort'], [['num', -12]]], type), otherwise];
+        }
         var stack = [];
         traverse(func, function(node, type) {
           stack.push(node);
@@ -7378,25 +7428,26 @@ function emterpretify(ast) {
           if (type !== 'call') return;
           if (node[1][0] === 'name' && isMathFunc(node[1][1])) return;
           var callType = ASM_NONE;
+          // after a call, check that we are not asleep - we must not have gone into
+          // emterpreted code and started an async operation with us non-emterpreted
+          // code on the stack.
+          var check = makeCheckBadState(1);
           var parent = stack[stack.length-1];
           if (parent) {
+            callType = detectType(parent, asmData);
             var temp = null;
-            if (parent[0] === 'binary' && parent[1] === '|' && parent[3][0] === 'num' && parent[3][1] === 0 &&
-                parent[2] === node) {
-              // int-coerced call
-              callType = ASM_INT;
-              temp = 'tempInt';
-            } else if (parent[0] === 'unary-prefix' && parent[1] === '+' && parent[2] === node) {
-              // double-coerced call
-              callType = ASM_DOUBLE;
-              temp = 'tempDouble';
+            switch (callType) {
+              case ASM_INT:    temp = 'tempInt'; break;
+              case ASM_DOUBLE: temp = 'tempDouble'; break;
+              case ASM_FLOAT:  temp = 'tempFloat'; break;
+              case ASM_NONE:   break;
+              default: throw 'unhandled parent type in emterpter-async-assertions: ' + callType;
             }
-            // XXX fails on other coercions of odd types, like float32, simd, etc!
             if (temp) {
               // assign to temp, assert, return proper value:     temp = call() , (asyncState ? abort() : temp)
               trample(node, ['seq',
                 ['assign', null, ['name', temp], makeAsmCoercion(copy(node), callType)],
-                ['conditional', ['name', 'asyncState'], makeAsmCoercion(['call', ['name', 'abort'], [['num', '-12']]], callType), ['name', temp]]
+                makeBadStateAbort(check, callType, ['name', temp])
               ]);
               return;
             }
@@ -7404,22 +7455,28 @@ function emterpretify(ast) {
           // no important parent
           trample(node, ['seq',
             copy(node),
-            ['conditional', ['name', 'asyncState'], makeAsmCoercion(['call', ['name', 'abort'], [['num', '-12']]], ASM_INT), ['num', 0]]
+            makeBadStateAbort(check, ASM_INT, ['num', 0])
           ]);
         });
-        // add an assert in the prelude of the function
         var stats = getStatements(func);
         for (var i = 0; i < stats.length; i++) {
           var node = stats[i];
           if (node[0] == 'stat') node = node[1];
           if (node[0] !== 'var' && node[0] !== 'assign') {
+            // in the prelude, we check that we are not restoring the stack
             stats.splice(i, 0, ['stat',
-              ['conditional', ['name', 'asyncState'], makeAsmCoercion(['call', ['name', 'abort'], [['num', '-12']]], ASM_INT), ['num', 0]]
+              makeBadStateAbort(makeCheckBadState(2), ASM_INT, ['num', 0])
+            ]);
+            // update the state if necessary. note that we only do this when assertions are on,
+            // as in a non-emterpreted function the 1 => 3 change only matters for assertion
+            // purposes, no need to add overhead in fast code (but in emterpreted code, we
+            // need to do this on emtry, so that we know we are not saving the stack).
+            stats.splice(i, 0, ['stat',
+              makePreludeStateChange()
             ]);
             break;
           }
         }
-        // perhaps also add at loop headers? TODO
       }
       print(astToSrc(func));
     }
@@ -7557,7 +7614,9 @@ function emterpretify(ast) {
         func[3].push(srcToStat('sp = EMTSTACKTOP;'));
         var stackBytes = finalLocals*8;
         func[3].push(srcToStat('EMTSTACKTOP = EMTSTACKTOP + ' + stackBytes + ' | 0;'));
-        func[3].push(srcToStat('assert(((EMTSTACKTOP|0) <= (EMT_STACK_MAX|0))|0);'));
+        if (ASSERTIONS) {
+          func[3].push(srcToStat('if (((EMTSTACKTOP|0) > (EMT_STACK_MAX|0))|0) abortStackOverflowEmterpreter();'));
+        }
         asmData.vars['x'] = ASM_INT;
         func[3].push(srcToStat('while ((x | 0) < ' + stackBytes + ') { HEAP32[sp + x >> 2] = HEAP32[x >> 2] | 0; x = x + 4 | 0; }'));
       }
@@ -7576,7 +7635,7 @@ function emterpretify(ast) {
         bump += 8; // each local is a 64-bit value
       });
       if (ASYNC) {
-        argStats.push(['if', srcToExp('(asyncState|0) == 1'), srcToStat('asyncState = 3;')]); // we know we are during a sleep, mark the state
+        argStats.push(makePreludeStateChange());
         argStats = [['if', srcToExp('(asyncState|0) != 2'), ['block', argStats]]]; // 2 means restore, so do not trample the stack
       }
       func[3] = func[3].concat(argStats);
@@ -7664,7 +7723,7 @@ function prepDotZero(ast) {
 }
 function fixDotZero(js) {
   return js.replace(/-DOT\$ZERO\(-/g, '- DOT$ZERO(-') // avoid x - (-y.0) turning into x--y.0 when minified
-           .replace(/DOT\$ZERO\(([-+]?(0x)?[0-9a-f]*\.?[0-9]+([eE][-+]?[0-9]+)?)\)/g, function(m, num) {
+           .replace(/DOT\$ZERO\(([-+]?(0x)?[0-9a-f]*\.?[0-9]*([eE][-+]?[0-9]+)?)\)/g, function(m, num) {
     if (num.substr(0, 2) === '0x' || num.substr(0, 3) === '-0x') {
       var ret = eval(num).toString();
       if (ret.indexOf('.') < 0) return ret + '.0';
@@ -7855,125 +7914,12 @@ function eliminateDeadGlobals(ast) {
   });
 }
 
-// Removes obviously-unused code. Similar to closure compiler in its rules -
-// export e.g. by Module['..'] = theThing; , or use it somewhere, otherwise
-// it goes away.
-function JSDCE(ast, multipleIterations) {
-  function iteration() {
-    var removed = false;
-    var scopes = [{}]; // begin with empty toplevel scope
-    function DUMP() {
-      printErr('vvvvvvvvvvvvvv');
-      for (var i = 0; i < scopes.length; i++) {
-        printErr(i + ' : ' + JSON.stringify(scopes[i]));
-      }
-      printErr('^^^^^^^^^^^^^^');
-    }
-    function ensureData(scope, name) {
-      if (Object.prototype.hasOwnProperty.call(scope, name)) return scope[name];
-      scope[name] = {
-        def: 0,
-        use: 0,
-        param: 0 // true for function params, which cannot be eliminated
-      };
-      return scope[name];
-    }
-    function cleanUp(ast, names) {
-      traverse(ast, function(node, type) {
-        if (type === 'defun' && Object.prototype.hasOwnProperty.call(names, node[1])) {
-          removed = true;
-          return emptyNode();
-        }
-        if (type === 'defun' || type === 'function') return null; // do not enter other scopes
-        if (type === 'var') {
-          node[1] = node[1].filter(function(varItem, j) {
-            var curr = varItem[0];
-            var value = varItem[1];
-            var keep = !(curr in names) || (value && hasSideEffects(value));
-            if (!keep) removed = true;
-            return keep;
-          });
-          if (node[1].length === 0) return emptyNode();
-        }
-      });
-      return ast;
-    }
-    traverse(ast, function(node, type) {
-      if (type === 'var') {
-        node[1].forEach(function(varItem, j) {
-          var name = varItem[0];
-          ensureData(scopes[scopes.length-1], name).def = 1;
-        });
-        return;
-      }
-      if (type === 'object') {
-        return;
-      }
-      if (type === 'defun' || type === 'function') {
-        // defun names matter - function names (the y in var x = function y() {..}) are just for stack traces.
-        if (type === 'defun') ensureData(scopes[scopes.length-1], node[1]).def = 1;
-        var scope = {};
-        node[2].forEach(function(param) {
-          ensureData(scope, param).def = 1;
-          scope[param].param = 1;
-        });
-        scopes.push(scope);
-        return;
-      }
-      if (type === 'name') {
-        ensureData(scopes[scopes.length-1], node[1]).use = 1;
-      }
-    }, function(node, type) {
-      if (type === 'defun' || type === 'function') {
-        // we can ignore self-references, i.e., references to ourselves inside
-        // ourselves, for named defined (defun) functions
-        var ownName = type === 'defun' ? node[1] : '';
-        var scope = scopes.pop();
-        var names = set();
-        for (name in scope) {
-          if (name === ownName) continue;
-          var data = scope[name];
-          if (data.use && !data.def) {
-            // this is used from a higher scope, propagate the use down
-            ensureData(scopes[scopes.length-1], name).use = 1;
-            continue;
-          }
-          if (data.def && !data.use && !data.param) {
-            // this is eliminateable!
-            names[name] = 0;
-          }
-        }
-        cleanUp(node[3], names);
-      }
-    });
-    // toplevel
-    var scope = scopes.pop();
-    assert(scopes.length === 0);
-
-    var names = set();
-    for (var name in scope) {
-      var data = scope[name];
-      if (data.def && !data.use) {
-        assert(!data.param); // can't be
-        // this is eliminateable!
-        names[name] = 0;
-      }
-    }
-    cleanUp(ast, names);
-    return removed;
-  }
-  while (iteration() && multipleIterations) { }
-}
-
-// Aggressive JSDCE - multiple iterations
-function AJSDCE(ast) {
-  JSDCE(ast, /* multipleIterations= */ true);
-}
-
 function isAsmLibraryArgAssign(node) {
-  return node[0] === 'assign' && node[2][0] === 'dot'
-                              && node[2][1][0] === 'name' && node[2][1][1] === 'Module'
-                              && node[2][2] === 'asmLibraryArg';
+  return node[0] === 'var' && node[1][0] && node[1][0][0] == 'asmLibraryArg';
+}
+
+function asmLibraryArgs(node) {
+  return node[1][0][1];
 }
 
 function isAsmUse(node) {
@@ -7997,6 +7943,12 @@ function getModuleUseName(node) {
   return node[2][1];
 }
 
+function isModuleAsmUse(node) { // Module["asm"][..string..]
+  return node[0] === 'sub' &&
+         node[1][0] === 'sub' && node[1][1][0] === 'name' && node[1][1][1] === 'Module' && node[1][2][0] === 'string' && node[1][2][1] === 'asm' &&
+         node[2][0] === 'string';
+}
+
 // A static dyncall is dynCall('vii', ..), which is actually static even
 // though we call dynCall() - we see the string signature statically.
 function isStaticDynCall(node) {
@@ -8017,256 +7969,6 @@ function getStaticDynCallName(node) {
 function isDynamicDynCall(node) {
   return (node[0] === 'call' && node[1][0] === 'name' && node[1][1] === 'dynCall' && node[2][0][0] !== 'string') ||
          (node[0] === 'string' && node[1] === 'dynCall_');
-}
-
-//
-// Emit the DCE graph, to help optimize the combined JS+wasm.
-// This finds where JS depends on wasm, and where wasm depends
-// on JS, and prints that out.
-//
-// The analysis here is simplified, and not completely general. It
-// is enough to optimize the common case of JS library and runtime
-// functions involved in loops with wasm, but not more complicated
-// things like JS objects and sub-functions. Specifically we
-// analyze as follows:
-//
-//  * We consider (1) the toplevel scope, and (2) the scopes of toplevel defined
-//    functions (defun, not function; i.e., function X() {} where
-//    X can be called later, and not y = function Z() {} where Z is
-//    just a name for stack traces). We also consider the wasm, which
-//    we can see things going to and arriving from.
-//  * Anything used in a defun creates a link in the DCE graph, either
-//    to another defun, or the wasm.
-//  * Anything used in the toplevel scope is rooted, as it is code
-//    we assume will execute. The exceptions are
-//     * when we receive something from wasm; those are "free" and
-//       do not cause rooting. (They will become roots if they are
-//       exported, the metadce logic will handle that.)
-//     * when we send something to wasm; sending a defun causes a
-//       link in the DCE graph.
-//  * Anything not in the toplevel or not in a toplevel defun is
-//    considering rooted. We don't optimize those cases.
-//
-// Special handling:
-//
-//  * dynCall('vii', ..) are dynamic dynCalls, but we analyze them
-//    statically, to preserve the dynCall_vii etc. method they depend on.
-//    Truly dynamic dynCalls (not to a string constant) will not work,
-//    and require the user to export them.
-//  * Truly dynamic dynCalls are assumed to reach any dynCall_*.
-//
-// XXX this modifies the input AST. if you want to keep using it,
-//     that should be fixed. Currently the main use case here does
-//     not require that. TODO FIXME
-//
-function emitDCEGraph(ast) {
-  // First pass: find the wasm imports and exports, and the toplevel
-  // defuns, and save them on the side, removing them from the AST,
-  // which makes the second pass simpler.
-  //
-  // The imports that wasm receives look like this:
-  //
-  //  Module.asmLibraryArg = { "abort": abort, "assert": assert, [..] };
-  //
-  // The exports are trickier, as they have a different form whether or not
-  // async compilation is enabled. It can be either:
-  //
-  //  var _malloc = Module["_malloc"] = asm["_malloc"];
-  //
-  // or
-  //
-  //  var _malloc = Module["_malloc"] = (function() {
-  //   return Module["asm"]["_malloc"].apply(null, arguments);
-  //  });
-  //
-  var imports = [];
-  var defuns = [];
-  var dynCallNames = [];
-  var nameToGraphName = {};
-  var modulePropertyToGraphName = {};
-  var exportNameToGraphName = {}; // identical to asm['..'] nameToGraphName
-  var foundAsmLibraryArgAssign = false;
-  var graph = [];
-  traverse(ast, function(node, type) {
-    if (isAsmLibraryArgAssign(node)) {
-      var items = node[3][1];
-      items.forEach(function(item) {
-        assert(item[1][0] === 'name' && item[1][1] === item[0], item[0]); // must have x: x form, nothing else
-        imports.push(item[0]); // the value doesn't matter, for now
-      });
-      foundAsmLibraryArgAssign = true;
-      return emptyNode(); // ignore this in the second pass; this does not root
-    } else if (type === 'var') {
-      if (node[1] && node[1].length === 1) {
-        var item = node[1][0];
-        var name = item[0];
-        var value = item[1];
-        if (Array.isArray(value) && value[0] === 'assign') {
-          var assigned = value[2];
-          if (isModuleUse(assigned) && getModuleUseName(assigned) === name) {
-            // this is
-            //  var x = Module['x'] = ?
-            // which looks like a wasm export being received. confirm with the asm use
-            var found = 0;
-            var asmName;
-            traverse(value[3], function(node, type) {
-              if (isAsmUse(node)) {
-                found++;
-                asmName = getAsmUseName(node);
-              }
-            });
-            // in the wasm backend, the asm name may have one fewer "_" prefixed
-            if (found === 1) {
-              // this is indeed an export
-              // the asmName is what the wasm provides directly; the outside JS
-              // name may be slightly different (extra "_" in wasm backend)
-              var graphName = getGraphName(name, 'export');
-              nameToGraphName[name] = graphName;
-              modulePropertyToGraphName[name] = graphName;
-              exportNameToGraphName[asmName] = graphName;
-              if (/^dynCall_/.test(name)) {
-                dynCallNames.push(graphName);
-              }
-              return emptyNode(); // ignore this in the second pass; this does not root
-            }
-          }
-        }
-      }
-    } else if (type === 'defun') {
-      defuns.push(node);
-      var name = node[1];
-      nameToGraphName[name] = getGraphName(name, 'defun');
-      return emptyNode(); // ignore this in the second pass; we scan defuns separately
-    } else if (type === 'function') {
-      return null; // don't look inside
-    }
-  });
-  assert(foundAsmLibraryArgAssign); // must find the info we need
-  // Second pass: everything used in the toplevel scope is rooted;
-  // things used in defun scopes create links
-  function getGraphName(name, what) {
-    return 'emcc$' + what + '$' + name;
-  }
-  var infos = {}; // the graph name of the item => info for it
-  imports.forEach(function(import_) {
-    var name = getGraphName(import_, 'import');
-    var info = infos[name] = {
-      name: name,
-      import: ['env', import_],
-      reaches: {}
-    };
-    if (nameToGraphName.hasOwnProperty(import_)) {
-      info.reaches[nameToGraphName[import_]] = 1;
-    } // otherwise, it's a number, ignore
-  });
-  for (var e in exportNameToGraphName) {
-    var name = exportNameToGraphName[e];
-    infos[name] = {
-      name: name,
-      export: e,
-      reaches: {}
-    };
-  }
-  // a function that handles a node we visit, in either a defun or
-  // the toplevel scope (in which case the second param is not provided)
-  function visitNode(node, defunInfo) {
-    // TODO: scope awareness here. for now we just assume all uses are
-    //       from the top scope, which might create more uses than needed
-    var reached;
-    if (node[0] === 'name') {
-      var name = node[1];
-      if (nameToGraphName.hasOwnProperty(name)) {
-        reached = nameToGraphName[name];
-      }
-    } else if (isModuleUse(node)) {
-      var name = getModuleUseName(node);
-      if (modulePropertyToGraphName.hasOwnProperty(name)) {
-        reached = modulePropertyToGraphName[name];
-      }
-    } else if (isStaticDynCall(node)) {
-      reached = getGraphName(getStaticDynCallName(node), 'export');
-    } else if (isDynamicDynCall(node)) {
-      // this can reach *all* dynCall_* targets, we can't narrow it down
-      reached = dynCallNames;
-    } else if (isAsmUse(node)) {
-      // any remaining asm uses are always rooted in any case
-      var name = getAsmUseName(node);
-      if (exportNameToGraphName.hasOwnProperty(name)) {
-        infos[exportNameToGraphName[name]].root = true;
-      }
-      return;
-    }
-    if (reached) {
-      function addReach(reached) {
-        if (defunInfo) {
-          defunInfo.reaches[reached] = 1; // defun reaches it
-        } else {
-          infos[reached].root = true; // in global scope, root it
-        }
-      }
-      if (typeof reached === 'string') {
-        addReach(reached);
-      } else {
-        reached.forEach(addReach);
-      }
-    }
-  }
-  defuns.forEach(function(defun) {
-    var name = getGraphName(defun[1], 'defun');
-    var info = infos[name] = {
-      name: name,
-      reaches: {}
-    };
-    traverse(defun[3], function(node, type) {
-      visitNode(node, info);
-    });
-  });
-  traverse(ast, function(node, type) {
-    visitNode(node, null);
-  });
-  // Final work: print out the graph
-  // sort for determinism
-  function sortedNamesFromMap(map) {
-    var names = [];
-    for (var name in map) {
-      names.push(name);
-    }
-    names.sort();
-    return names;
-  }
-  sortedNamesFromMap(infos).forEach(function(name) {
-    var info = infos[name];
-    info.reaches = sortedNamesFromMap(info.reaches);
-    graph.push(info);
-  });
-  print(JSON.stringify(graph, null, ' '));
-}
-
-// Apply graph removals from running wasm-metadce
-function applyDCEGraphRemovals(ast) {
-  var unused = set(extraInfo.unused);
-
-  traverse(ast, function(node, type) {
-    if (isAsmLibraryArgAssign(node)) {
-      node[3][1] = node[3][1].filter(function(item) {
-        var name = item[0];
-        var value = item[1];
-        var full = 'emcc$import$' + name;
-        return !((full in unused) && !hasSideEffects(value));
-      });
-    } else if (type === 'assign') {
-      // when we assign to a thing we don't need, we can just remove the assign
-      var target = node[2];
-      if (isAsmUse(target) || isModuleUse(target)) {
-        var name = target[2][1];
-        var full = 'emcc$export$' + name;
-        var value = node[3];
-        if ((full in unused) && !hasSideEffects(value)) {
-          return ['name', 'undefined'];
-        }
-      }
-    }
-  });
 }
 
 function removeFuncs(ast) {
@@ -8316,10 +8018,6 @@ var passes = {
   findReachable: findReachable,
   dumpCallGraph: dumpCallGraph,
   asmLastOpts: asmLastOpts,
-  JSDCE: JSDCE,
-  AJSDCE: AJSDCE,
-  emitDCEGraph: emitDCEGraph,
-  applyDCEGraphRemovals: applyDCEGraphRemovals,
   removeFuncs: removeFuncs,
   noop: function() {},
 
@@ -8389,4 +8087,3 @@ if (emitAst) {
     print(JSON.stringify(ast));
   }
 }
-

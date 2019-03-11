@@ -1,4 +1,10 @@
-#include<emscripten.h>
+// Copyright 2017 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
+#include <emscripten.h>
+#include <stdio.h>
 
 int main() {
 #ifdef USE_FILES
@@ -18,7 +24,7 @@ int main() {
 #endif
   EM_ASM({
     // use eval, so that the compiler can't see FS usage statically
-    eval('Module.print("Data: " + JSON.stringify(MEMFS.getFileDataAsRegularArray(FS.root.contents["file.txt"])))');
+    eval('out("Data: " + JSON.stringify(MEMFS.getFileDataAsRegularArray(FS.root.contents["file.txt"])))');
   });
 }
 

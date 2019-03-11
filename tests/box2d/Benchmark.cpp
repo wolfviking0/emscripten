@@ -1,3 +1,7 @@
+// Copyright 2013 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
 
 
 //
@@ -19,14 +23,16 @@ typedef struct {
 } result_t;
 // ==============================
 
-
-
 #include <cstdio>
 #include <time.h>
 #include <math.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#endif
+
+#if NO_PRINTING
+#define printf(fmt, ...) (0)
 #endif
 
 #include "Box2D/Box2D.h"

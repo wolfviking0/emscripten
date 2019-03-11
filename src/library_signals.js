@@ -1,3 +1,8 @@
+// Copyright 2014 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 // 'use strict'
 var funs = {
   _sigalrm_handler: 0,
@@ -8,7 +13,7 @@ var funs = {
       __sigalrm_handler = func;
     } else {
 #if ASSERTIONS
-      Module.printErr('Calling stub instead of signal()');
+      err('Calling stub instead of signal()');
 #endif
     }
     return 0;
@@ -35,25 +40,25 @@ var funs = {
   sigaction: function(signum, act, oldact) {
     //int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 #if ASSERTIONS
-    Module.printErr('Calling stub instead of sigaction()');
+    err('Calling stub instead of sigaction()');
 #endif
     return 0;
   },
   sigprocmask: function() {
 #if ASSERTIONS
-    Module.printErr('Calling stub instead of sigprocmask()');
+    err('Calling stub instead of sigprocmask()');
 #endif
     return 0;
   },
   __libc_current_sigrtmin: function() {
 #if ASSERTIONS
-    Module.printErr('Calling stub instead of __libc_current_sigrtmin');
+    err('Calling stub instead of __libc_current_sigrtmin');
 #endif
     return 0;
   },
   __libc_current_sigrtmax: function() {
 #if ASSERTIONS
-    Module.printErr('Calling stub instead of __libc_current_sigrtmax');
+    err('Calling stub instead of __libc_current_sigrtmax');
 #endif
     return 0;
   },
@@ -63,7 +68,7 @@ var funs = {
     // Makes no sense in a single-process environment.
 	  // Should kill itself somtimes depending on `pid`
 #if ASSERTIONS
-    Module.printErr('Calling stub instead of kill()');
+    err('Calling stub instead of kill()');
 #endif
     ___setErrNo(ERRNO_CODES.EPERM);
     return -1;
@@ -72,14 +77,14 @@ var funs = {
   killpg__deps: ['$ERRNO_CODES', '__setErrNo'],
   killpg: function() {
 #if ASSERTIONS
-    Module.printErr('Calling stub instead of killpg()');
+    err('Calling stub instead of killpg()');
 #endif
     ___setErrNo(ERRNO_CODES.EPERM);
     return -1;
   },
   siginterrupt: function() {
 #if ASSERTIONS
-    Module.printErr('Calling stub instead of siginterrupt()');
+    err('Calling stub instead of siginterrupt()');
 #endif
     return 0;
   },
@@ -87,7 +92,7 @@ var funs = {
   raise__deps: ['$ERRNO_CODES', '__setErrNo'],
   raise: function(sig) {
 #if ASSERTIONS
-    Module.printErr('Calling stub instead of raise()');
+    err('Calling stub instead of raise()');
 #endif
   ___setErrNo(ERRNO_CODES.ENOSYS);
 #if ASSERTIONS
@@ -100,7 +105,7 @@ var funs = {
   alarm__deps: ['_sigalrm_handler'],
   alarm: function(seconds) {
     setTimeout(function() {
-      if (__sigalrm_handler) Module['dynCall_vi'](__sigalrm_handler, 0);
+      if (__sigalrm_handler) {{{ makeDynCall('vi') }}}(__sigalrm_handler, 0);
     }, seconds*1000);
   },
   ualarm: function() {
@@ -119,11 +124,12 @@ var funs = {
     // http://pubs.opengroup.org/onlinepubs/000095399/functions/pause.html
     // We don't support signals, so we return immediately.
 #if ASSERTIONS
-    Module.printErr('Calling stub instead of pause()');
+    err('Calling stub instead of pause()');
 #endif
     ___setErrNo(ERRNO_CODES.EINTR);
     return -1;
   },
+#if SUPPORT_LONGJMP
 #if ASSERTIONS
   siglongjmp__deps: ['longjmp'],
   siglongjmp: function(env, value) {
@@ -135,8 +141,11 @@ var funs = {
     _longjmp(env, value);
   },
 #else
+  siglongjmp__sig: 'vii',
   siglongjmp: 'longjmp',
 #endif
+#endif
+
   sigpending: function(set) {
     {{{ makeSetValue('set', 0, 0, 'i32') }}};
     return 0;
