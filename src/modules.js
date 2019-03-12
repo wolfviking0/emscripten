@@ -119,7 +119,7 @@ var LibraryManager = {
         'library_webgl.js',
         'library_openal.js',
         'library_opencl.js',
-        'library_cuda.js'
+        'library_cuda.js',
         'library_vr.js'
       ]);
 
