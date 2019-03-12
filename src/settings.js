@@ -465,6 +465,9 @@ var CL_PRINT_TRACE = 0
 // Check if object is inside the hashmap
 var CL_CHECK_VALID_OBJECT = 0 
 
+// Check if set pointer 
+var CL_CHECK_SET_POINTER = 0
+
 // Print out debugging information from our Cuda implementation.
 var CU_DEBUG = 0; 
 
